@@ -1,0 +1,3 @@
+ALTER TABLE properties
+  ADD COLUMN IF NOT EXISTS floor_area DECIMAL(8,2) NULL AFTER bathrooms,
+  ADD COLUMN IF NOT EXISTS freehold CHAR(1) NOT NULL DEFAULT 'F' AFTER floor_area;
