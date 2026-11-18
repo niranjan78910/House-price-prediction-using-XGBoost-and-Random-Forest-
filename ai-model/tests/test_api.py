@@ -35,6 +35,14 @@ class PredictionAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("error", response.get_json())
 
+    def test_invalid_floor_area(self):
+        response = self.client.post("/predict", json={"postcode": "SW1A 1AA", "property_type": "F", "floor_area": -5})
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_object_payload(self):
+        response = self.client.post("/predict", json=["not", "a", "property"])
+        self.assertEqual(response.status_code, 400)
+
     def test_valid_prediction(self):
         response = self.client.post("/predict", json={"postcode": "SW1A 1AA", "property_type": "F"})
         self.assertEqual(response.status_code, 200)
