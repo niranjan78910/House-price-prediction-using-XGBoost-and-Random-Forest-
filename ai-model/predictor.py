@@ -1,4 +1,5 @@
 import json
+import os
 import joblib
 import pandas as pd
 import numpy as np
@@ -19,7 +20,13 @@ class PropertyPredictor:
         # Load encoders
         self.encoder = joblib.load(encoder_path)
         self.district_map = joblib.load(district_map_path)
-        self.global_mean = self.district_map.mean()
+        metadata_path = os.path.join(os.path.dirname(model_path), "training_metadata.json")
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r") as metadata_file:
+                self.global_mean = json.load(metadata_file)["global_mean_log_price"]
+        else:
+            # Backward compatibility with previously saved model artefacts.
+            self.global_mean = self.district_map.mean()
 
     def predict_from_payload(self, payload: dict) -> float:
         # Extract and sanitize features
