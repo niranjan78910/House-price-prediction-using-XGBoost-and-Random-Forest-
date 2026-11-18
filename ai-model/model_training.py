@@ -71,11 +71,11 @@ df["rooms"]      = pd.to_numeric(df["rooms"],      errors="coerce")
 df = df.dropna()
 
 # get the year - house prices change a lot year to year
-df["year"] = pd.to_datetime(df["date"]).dt.year
+df["year"] = pd.to_datetime(df["date"], errors="coerce").dt.year
 df = df.drop(columns=["date"])
 
 # only use data from 2010 onwards - more relevant for today
-df = df[df["year"] >= 2010]
+df = df[(df["year"] >= 2010) & (df["price"] > 0)].copy()
 
 # clean up text
 df["postcode"]      = df["postcode"].str.strip().str.upper()
@@ -152,8 +152,13 @@ district_stats["enc"] = (
     / (district_stats["count"] + 10)
 )
 
-train_df["district_te"] = (train_df["postcode_district"]
-                           .map(district_stats["enc"]).fillna(global_mean))
+# Leave-one-out encoding prevents a training row's own price from leaking
+# into its location feature. Validation/test rows use the training-only map.
+district_sum = train_df["postcode_district"].map(district_stats["mean"] * district_stats["count"])
+district_count = train_df["postcode_district"].map(district_stats["count"])
+train_df["district_te"] = (
+    (district_sum - y_train + global_mean * 10) / (district_count - 1 + 10)
+).fillna(global_mean)
 val_df["district_te"] = (val_df["postcode_district"]
                           .map(district_stats["enc"]).fillna(global_mean))
 test_df["district_te"]  = (test_df["postcode_district"]
@@ -276,6 +281,11 @@ print(f"  Selected model: {best_name} (held-out log-price R2 = {test_r2:.4f})")
 
 # Save encoders as before
 joblib.dump(enc, os.path.join(SCRIPT_DIR, "ordinal_encoder.pkl"))
+import json
+with open(os.path.join(SCRIPT_DIR, "feature_columns.json"), "w") as feature_file:
+    json.dump(X_train.columns.tolist(), feature_file)
+with open(os.path.join(SCRIPT_DIR, "training_metadata.json"), "w") as metadata_file:
+    json.dump({"global_mean_log_price": float(global_mean)}, metadata_file)
 joblib.dump(district_stats["enc"], os.path.join(SCRIPT_DIR, "district_encode_map.pkl"))
 
 print(f"  Saved to: price_predictor.pkl")
