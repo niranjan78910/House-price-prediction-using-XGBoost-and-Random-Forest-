@@ -83,12 +83,12 @@ The API returns a JSON object with a `predicted_price` field when inference succ
 
 `ai-model/model_training.py` loads local CSV files from `ai-model/data/hpm_la_2024/`, selects price and property attributes, filters incomplete/outlying records and builds features including floor area, room count, transfer year, property type, tenure and postcode-district target encoding.
 
-The script uses an 80/20 random train/test split, trains Random Forest and XGBoost on log-transformed prices, and prints MAE and RMSE in pounds and R² on log prices. It saves an XGBoost model and encoding artefacts used by `ai-model/predictor.py`.
+The updated script uses a 64/16/20 train/validation/test split, trains Random Forest and XGBoost on log-transformed prices, selects the model by validation R², and reports held-out MAE and RMSE in pounds and R² on log prices. It saves the selected model and encoding artefacts used by `ai-model/predictor.py`.
 
 **Important evaluation limitations (to address before publishing a headline score):**
-- `QUICK_TEST = True` currently restricts training to three CSV files; this does not reproduce a full-dataset run.
-- XGBoost early stopping currently monitors the test split. Use a separate validation set and reserve the test set for final evaluation.
-- The script always exports XGBoost, even if Random Forest scores better.
+- Full training is the default. Set `QUICK_TEST=1` to restrict training to three CSV files for debugging.
+- XGBoost early stopping now monitors the validation split rather than the held-out test split.
+- The script now selects between Random Forest and XGBoost using validation R². Training-set target encoding remains an area for improvement because each training row contributes to its own district mean; consider out-of-fold target encoding.
 - Dataset size and model scores are not independently reproducible from the checked-in repository because the raw training data is excluded.
 
 ## API
@@ -98,7 +98,7 @@ The script uses an 80/20 random train/test split, trains Random Forest and XGBoo
 | GET | `/health` | Service health check |
 | POST | `/predict` | Estimate a property price from JSON inputs |
 
-The current Flask entry point runs with `debug=True`, suitable only for local development. Add strict input validation, exception handling, automated tests and a production WSGI configuration before deployment.
+The Flask entry point now disables debug mode and validates basic numeric inputs. Additional schema validation, integration tests, exception handling and a production WSGI configuration are needed before deployment.
 
 ## Next improvements
 
