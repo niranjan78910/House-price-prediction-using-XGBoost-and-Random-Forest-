@@ -1,25 +1,28 @@
 <?php
-// Database configuration centralized in one place for easy updates
-// In production, these would be loaded from .env file for security
-$host = "127.0.0.1";
-$port = 3306;
-$dbname = "prop_flow_ai";
-$user = "root";
-$pass = "";
+// Configure database credentials through environment variables in deployments.
+// Local XAMPP defaults are retained for development compatibility.
+$host = getenv("DB_HOST") ?: "127.0.0.1";
+$port = (int)(getenv("DB_PORT") ?: 3306);
+$dbname = getenv("DB_NAME") ?: "prop_flow_ai";
+$user = getenv("DB_USER") ?: "root";
+$pass = getenv("DB_PASSWORD");
+if ($pass === false) {
+    $pass = "";
+}
 
 try {
-    // PDO (PHP Data Objects) provides a consistent interface for database operations
-    // Using prepared statements with ? placeholders prevents SQL injection attacks
-    // charset=utf8mb4 supports full Unicode including emoji (important for international users)
     $pdo = new PDO(
         "mysql:host={$host};port={$port};dbname={$dbname};charset=utf8mb4",
         $user,
-        $pass
+        $pass,
+        [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]
     );
-    // ERRMODE_EXCEPTION throws PDOException on errors instead of silent failures
-    // This makes bugs obvious during development and easier to debug
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    // Exit immediately if database connection fails - no point continuing without data access
-    die("DB connection failed: " . $e->getMessage());
+    // Do not disclose connection details or database credentials to visitors.
+    error_log("Database connection failed: " . $e->getMessage());
+    http_response_code(503);
+    exit("Service temporarily unavailable.");
 }
