@@ -23,7 +23,7 @@ print("Step 1: Loading all CSV files from folder...")
 
 # QUICK TEST MODE: set to True to only use a small number of files for fast debugging
 # Set QUICK_TEST = False to use all data for your final run
-QUICK_TEST = True
+QUICK_TEST = os.environ.get('QUICK_TEST', '0') == '1'
 N_FILES = 3  # Number of CSVs to load in quick test mode
 
 
@@ -32,7 +32,7 @@ N_FILES = 3  # Number of CSVs to load in quick test mode
 # **************************************************
 import glob
 import os
-all_files = glob.glob(os.path.join(DATA_FOLDER, "*.csv"))
+all_files = sorted(glob.glob(os.path.join(DATA_FOLDER, "*.csv")))
 if QUICK_TEST:
     all_files = all_files[:N_FILES]
 if not all_files:
@@ -107,17 +107,21 @@ print(f"  Property types: {df['property_type'].value_counts().to_dict()}")
 # Split BEFORE encoding so the test set never
 # influences the training calculations
 # -----------------------------------------------
-print("\nStep 3: Splitting data (80% train, 20% test)...")
-train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+print("\nStep 3: Splitting data (64% train, 16% validation, 20% test)...")
+train_val_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
+train_df, val_df = train_test_split(train_val_df, test_size=0.2, random_state=42)
 train_df = train_df.copy()
-test_df  = test_df.copy()
+val_df = val_df.copy()
+test_df = test_df.copy()
 
 # we predict log(price) 
 # log makes it more normal
 y_train = np.log(train_df["price"])
+y_val = np.log(val_df["price"])
 y_test  = np.log(test_df["price"])
 
 print(f"  Train: {len(train_df):,} rows")
+print(f"  Validation: {len(val_df):,} rows")
 print(f"  Test:  {len(test_df):,} rows")
 
 
@@ -150,6 +154,8 @@ district_stats["enc"] = (
 
 train_df["district_te"] = (train_df["postcode_district"]
                            .map(district_stats["enc"]).fillna(global_mean))
+val_df["district_te"] = (val_df["postcode_district"]
+                          .map(district_stats["enc"]).fillna(global_mean))
 test_df["district_te"]  = (test_df["postcode_district"]
                            .map(district_stats["enc"]).fillna(global_mean))
 
@@ -161,15 +167,22 @@ cat_cols  = ["property_type", "freehold"]
 enc       = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
 train_cat = pd.DataFrame(enc.fit_transform(train_df[cat_cols]),
                          columns=cat_cols, index=train_df.index)
+val_cat = pd.DataFrame(enc.transform(val_df[cat_cols]),
+                       columns=cat_cols, index=val_df.index)
 test_cat  = pd.DataFrame(enc.transform(test_df[cat_cols]),
                          columns=cat_cols, index=test_df.index)
 
-# final feature table - only 7 features total
+# final feature table - six features total
 num_cols = ["floor_area", "rooms", "year", "district_te"]
 
 X_train = pd.concat([
     train_df[num_cols].reset_index(drop=True),
     train_cat.reset_index(drop=True)
+], axis=1)
+
+X_val = pd.concat([
+    val_df[num_cols].reset_index(drop=True),
+    val_cat.reset_index(drop=True)
 ], axis=1)
 
 X_test = pd.concat([
@@ -179,6 +192,7 @@ X_test = pd.concat([
 
 # fill any leftover missing values with median
 X_train = X_train.fillna(X_train.median())
+X_val = X_val.fillna(X_train.median())
 X_test  = X_test.fillna(X_train.median())
 
 print(f"  Features ({X_train.shape[1]}): {X_train.columns.tolist()}")
@@ -212,7 +226,7 @@ xgb = XGBRegressor(
     verbosity             = 0,
     early_stopping_rounds = 50
 )
-xgb.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
+xgb.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
 print("  XGBoost done.")
 
 
@@ -221,13 +235,13 @@ print("  XGBoost done.")
 # -----------------------------------------------
 print("\nStep 6: Evaluating models...")
 
-def evaluate(model, name):
-    pred_log = model.predict(X_test)
+def evaluate(model, name, X, y):
+    pred_log = model.predict(X)
     pred     = np.exp(pred_log)
-    y_real   = np.exp(y_test)
+    y_real   = np.exp(y)
     mae      = mean_absolute_error(y_real, pred)
     rmse     = np.sqrt(((y_real - pred) ** 2).mean())
-    r2       = r2_score(y_test, pred_log)
+    r2       = r2_score(y, pred_log)
     status   = "PASS" if r2 >= 0.80 else "needs improvement"
     print(f"\n  {name}")
     print(f"    MAE  : £{mae:,.0f}")
@@ -235,8 +249,13 @@ def evaluate(model, name):
     print(f"    R2   : {r2:.4f}  [{status}]")
     return r2
 
-r2_rf  = evaluate(rf,  "Random Forest")
-r2_xgb = evaluate(xgb, "XGBoost")
+print("Validation results (for model selection):")
+r2_rf_val = evaluate(rf, "Random Forest", X_val, y_val)
+r2_xgb_val = evaluate(xgb, "XGBoost", X_val, y_val)
+best_model = rf if r2_rf_val > r2_xgb_val else xgb
+best_name = "Random Forest" if r2_rf_val > r2_xgb_val else "XGBoost"
+print("\nHeld-out test results (report these):")
+test_r2 = evaluate(best_model, best_name, X_test, y_test)
 
 print("\n  Feature importance (XGBoost):")
 fi = pd.Series(xgb.feature_importances_, index=X_train.columns)
@@ -251,9 +270,8 @@ for feat, imp in fi.sort_values(ascending=False).items():
 print("\nStep 7: Saving best model...")
 
 
-# Always save XGBoost as price_predictor.pkl for production (faster loading)
-joblib.dump(xgb, MODEL_PATH)
-print(f"  Best model: XGBoost  (R2 = {r2_xgb:.4f}) [FOR DEPLOYMENT]")
+joblib.dump(best_model, MODEL_PATH)
+print(f"  Selected model: {best_name} (held-out log-price R2 = {test_r2:.4f})")
 
 
 # Save encoders as before
